@@ -1,48 +1,77 @@
-from enum import Enum # 미리 정의 가능한 고정 변수 값
-from typing import Union
+from typing import List
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse # json 형식으로 데이터 전달 
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, model_validator
 import numpy as np
-from kmeans_recommendation import prepare_model,categorical_cols
-
-
+from itertools import product
+from kmeans_recommendation import prepare_model, categorical_cols
 
 app = FastAPI()
 
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://myowngym.kro.kr"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 모델 준비
 df, encoders, kmeans = prepare_model()
 
 
-def user_pref_to_cluster(user_pref ):
-    pref_vec = []
-    for col in categorical_cols:
-        val = user_pref.get(col, 'Unknown')
-        le = encoders[col]
-        if val in le.classes_:
-            pref_vec.append(le.transform([val])[0])
-        else:
-            pref_vec.append(-1)
-    pref_vec = np.array(pref_vec).reshape(1, -1)
-    cluster_label = kmeans.predict(pref_vec)[0]
-    return cluster_label
-
-
-
-
+# ✅ 모델 정의
 class Preferences(BaseModel):
-    Type:str
-    BodyPart:str
-    Equipment:str
-    Level:str
+    Type: List[str] = []
+    BodyPart: List[str] = []
+    Equipment: List[str] = []
+    Level: List[str] = []
+
+    @model_validator(mode='after')
+    def at_least_one_keyword(cls, values):
+        if not (values.Type or values.BodyPart or values.Equipment or values.Level):
+            raise ValueError("At least one keyword must be specified in preferences.")
+        return values
+
+
 class RecommendationRequest(BaseModel):
     usersId: int
     preferences: Preferences
 
-@app.post("/api/v1/suggest/exercises")
-def read_root(request: RecommendationRequest):
-    user_pref = request.preferences.model_dump()
-    print(request.preferences.model_dump())
-    cluster_label = user_pref_to_cluster(user_pref)
-    recs = df[df['cluster'] == cluster_label].sort_values(by='Rating', ascending=False)
-    return {"recommendations": recs[['Title', 'Rating']].head(10).to_dict(orient='records')}
 
+# 추천 클러스터 예측 함수
+def user_pref_to_cluster_combinations(user_pref):
+    values = {k: v if v else ['Unknown'] for k, v in user_pref.items()}
+    combinations = list(product(*[values[col] for col in categorical_cols]))
+
+    input_vectors = []
+    for combo in combinations:
+        vec = []
+        for col, val in zip(categorical_cols, combo):
+            le = encoders[col]
+            if val in le.classes_:
+                vec.append(le.transform([val])[0])
+            else:
+                vec.append(-1)
+        input_vectors.append(vec)
+
+    input_array = np.array(input_vectors)
+    cluster_labels = kmeans.predict(input_array)
+    return list(set(cluster_labels))
+
+
+@app.post("/suggest/exercises")
+def suggest_exercises(request: RecommendationRequest):
+    user_pref = request.preferences.model_dump(mode="python")
+    cluster_labels = user_pref_to_cluster_combinations(user_pref)
+
+    recs = df[df['cluster'].isin(cluster_labels)].copy()
+
+    # 숫자 인코딩 된 컬럼을 원본 문자열로 변환
+    for col in categorical_cols:
+        le = encoders[col]
+        recs[col] = le.inverse_transform(recs[col])
+
+    top10 = recs.sort_values(by='Rating', ascending=False)[['Title', 'Rating']].head(10).to_dict(orient='records')
+    return {"recommendations": top10}
