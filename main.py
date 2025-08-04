@@ -73,5 +73,5 @@ def suggest_exercises(request: RecommendationRequest):
         le = encoders[col]
         recs[col] = le.inverse_transform(recs[col])
 
-    top10 = recs.sort_values(by='Rating', ascending=False)[['Title', 'Rating']].head(10).to_dict(orient='records')
+    top10 = recs.sort_values(by='Rating', ascending=False)[['Title', 'Rating']].head(20).to_dict(orient='records')
     return {"recommendations": top10}
