@@ -5,8 +5,14 @@ from pydantic import BaseModel, model_validator
 import numpy as np
 from itertools import product
 from kmeans_recommendation import prepare_model, categorical_cols
+import requests
+import os
 
 app = FastAPI()
+
+
+#OLLAMA URL
+OLLAMA_URL = f"http://127.0.0.1:11434/api/generate"
 
 # CORS 설정
 app.add_middleware(
@@ -75,3 +81,24 @@ def suggest_exercises(request: RecommendationRequest):
 
     top10 = recs.sort_values(by='Rating', ascending=False)[['Title', 'Rating']].head(20).to_dict(orient='records')
     return {"recommendations": top10}
+
+
+# 요청 데이터 구조
+class ChatRequest(BaseModel):
+  prompt: str
+  model: str = "llama3"
+
+@app.post("/suggest/chat")
+def chat(req: ChatRequest):
+  payload ={
+    "model" : req.model,
+    "prompt" : req.prompt,
+    "stream" : False
+  }
+  response = requests.post(OLLAMA_URL, json=payload)
+  print(response)
+  return response.json()
+
+@app.get("/suggest/")
+def root():
+  return {"message": "Ollama FastAPI proxy is Running"}
